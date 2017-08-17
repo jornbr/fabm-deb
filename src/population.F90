@@ -3,7 +3,29 @@
 !-----------------------------------------------------------------------
 !BOP
 !
-! !MODULE: deb_population
+! !MODULE: DEB structured population tailored to Artemia urmiana
+!
+! This model structures the population along a structural volume axis,
+! which can be partitioned over an arbitrary number of bins (size classes).
+! The biomass per size class is represented by a depth-integrated field.
+!
+! In addition, each size class has associated reserve (E), maturity (E_H),
+! reproduction buffer (E_R), damage-inducing compounds (Q) and damage (H, equivalent
+! to structure-weighted hazard). These properties are represented by the totals for a
+! single size class that is, they are summed over all individuals in the size class.
+! For instance, total reserve in that size class, summed over all individuals.
+! This representation ensures mass conservation.
+!
+! Temperature tolerance is described by an Arrhenius relationship.
+!
+! Different reproduction strategies are supported:
+! 1. All energy allocated to reproduction is directly converted into offspring (the reproduction buffer is always zero)
+! 2. Energy allocated to reproduction is placed into a buffer which is converted into offspring at some prescribed rate.
+!    This rate contains a random component, which is designed to remove any dependence on the initial condition over
+!    the course of the simulation.
+!
+! For the purpose of describing Artemia, the maintenance rate has been made dependent on salinity.
+! Currently a DEBtox-like functional relationship is used for this.
 !
 ! !INTERFACE:
 module deb_population
