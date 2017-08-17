@@ -12,8 +12,9 @@
 ! In addition, each size class has associated reserve (E), maturity (E_H),
 ! reproduction buffer (E_R), damage-inducing compounds (Q) and damage (H, equivalent
 ! to structure-weighted hazard). These properties are represented by the totals for a
-! single size class that is, they are summed over all individuals in the size class.
-! For instance, total reserve in that size class, summed over all individuals.
+! single size class. That is, they are summed over all individuals in the size class.
+! For instance, reserve in that size class is expressed as NE, which equals the
+! number of individuals in that size class times their mean reserve content in Joule.
 ! This representation ensures mass conservation.
 !
 ! Temperature tolerance is described by an Arrhenius relationship.
