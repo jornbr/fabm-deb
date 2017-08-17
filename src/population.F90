@@ -27,7 +27,7 @@ module deb_population
       type (type_bottom_state_variable_id), allocatable :: id_NQ(:)
       type (type_bottom_state_variable_id), allocatable :: id_NH(:)
 
-      type (type_bottom_state_variable_id) :: id_waste
+      type (type_bottom_state_variable_id) :: id_waste, id_food
 
       type (type_horizontal_diagnostic_variable_id) :: id_R, id_N_e, id_N_j, id_N_a
 
@@ -161,13 +161,14 @@ contains
       call self%register_state_variable(self%id_NV(iclass), 'NV_'//trim(strindex), 'cm3', 'structural volume in bin '//trim(strindex), initial_value=NV_ini)
       call self%register_state_variable(self%id_NE(iclass), 'NE_'//trim(strindex), 'J', 'reserve in bin '//trim(strindex), initial_value=NE_ini)
       call self%register_state_variable(self%id_NE_H(iclass), 'NE_H_'//trim(strindex), 'J', 'maturity in bin '//trim(strindex))
-      call self%register_state_variable(self%id_NQ(iclass), 'NQ_'//trim(strindex), '-', 'damage inducing compounds in bin '//trim(strindex))
-      call self%register_state_variable(self%id_Nh(iclass), 'Nh_'//trim(strindex), 'd-1 cm3', 'hazard in bin '//trim(strindex))
+      call self%register_state_variable(self%id_NQ(iclass), 'NQ_'//trim(strindex), '-', 'damage-inducing compounds in bin '//trim(strindex))
+      call self%register_state_variable(self%id_Nh(iclass), 'Nh_'//trim(strindex), 'd-1 cm3', 'structure-weighted hazard in bin '//trim(strindex))
       call self%set_variable_property(self%id_NV(iclass),'V',self%V_center(iclass))
       call self%add_to_aggregate_variable(total_energy, self%id_NV(iclass), scale_factor=self%E_G)
       call self%add_to_aggregate_variable(total_energy, self%id_NE(iclass))
    end do
    call self%register_state_variable(self%id_waste, 'waste', 'J', 'waste target')
+   call self%register_state_dependency(self%id_food, 'food', 'J', 'food source')
    call self%add_to_aggregate_variable(total_energy, self%id_waste)
 
    call self%register_dependency(self%id_temp, standard_variables%temperature)
@@ -193,7 +194,8 @@ contains
       real(rk) :: E_G_per_kap
       real(rk) :: one_minus_kap
       real(rk) :: L_m3
-      real(rk) :: waste
+      real(rk) :: food, temp, salt
+      real(rk) :: c_T
       
       integer :: iclass
       real(rk) :: f
@@ -214,7 +216,9 @@ contains
       
       _HORIZONTAL_LOOP_BEGIN_
 
-         _GET_HORIZONTAL_(self%id_waste, waste)
+         _GET_HORIZONTAL_(self%id_food, food)
+         _GET_(self%id_temp, temp)
+         _GET_(self%id_salt, salt)
          N_e = 0
          N_j = 0
          N_a = 0
@@ -227,18 +231,23 @@ contains
       
             N(iclass) = max(0.0_rk, NV(iclass))/self%V_center(iclass)
             if (N(iclass) > 0) then
+               ! Positive number of individuals in this class
                E(iclass) = max(0.0_rk, NE(iclass)/N(iclass))
                E_H(iclass) = max(0.0_rk, NE_H(iclass)/N(iclass))
                Q(iclass) = max(0.0_rk, NQ(iclass)/N(iclass))
                H(iclass) = max(0.0_rk, Nh(iclass)/N(iclass))
                if (E_H(iclass) > self%E_Hp) then
+                  ! Adult
                   N_a = N_a + N(iclass)
                elseif (E_H(iclass) > self%E_Hb) then
+                  ! Juvenile
                   N_j = N_j + N(iclass)
                else
+                  ! Egg/embryo
                   N_e = N_e + N(iclass)
                end if
             else
+               ! Non-positive number of individuals in this class
                E(iclass) = 0
                E_H(iclass) = 0
                Q(iclass) = 0
@@ -253,7 +262,7 @@ contains
          ! Individual physiology (per size class)
          p_R_sum = 0
          dE_H = 0
-         f = max(0._rk, waste)/(max(0._rk, waste) + self%K)
+         f = max(0._rk, food)/(max(0._rk, food) + self%K)
          do iclass=1,self%nclass
             L = self%L_center(iclass)
             L3 = self%V_center(iclass)
@@ -268,10 +277,14 @@ contains
                ! Feeding juvenile or adult
                p_A = self%p_Am*L2*f*s
             end if
+
+            ! Catabolic flux
             p_C = E(iclass)*(v_E_G_plus_P_T_per_kap*s*L2 + p_M_per_kap*L3)/(E(iclass) + E_G_per_kap*L3)
+
+            ! Allocation to maturity/reproduction (maturity maintenance already subtracted)
             p_R = one_minus_kap*p_C - self%k_J*E_H(iclass)
 
-            ! Change in reserve (J), structural length (cm), maturity (J), reproduction buffer (J)
+            ! Change in reserve E (J) and structural length L (cm)
             dE(iclass) = p_A - p_C
             dL(iclass) = (E(iclass)*self%v*s-(p_M_per_kap*L+p_T_per_kap*s)*L3)/3/(E(iclass)+E_G_per_kap*L3)
 
@@ -279,6 +292,7 @@ contains
             !write (*,*) p_C, (self%v/L - dL(iclass)/L*3)*E(iclass), p_C - (self%v/L - dL(iclass)/L*3)*E(iclass)
             !write (*,*) (self%kap*p_C - self%p_M*L3 - self%p_T*L2)/self%E_G, dL(iclass)*3*L2, (self%kap*p_C - self%p_M*L3 - self%p_T*L2)/self%E_G - dL(iclass)*3*L2
 
+            ! Change in maturity E_H (J) and population-integrated reproduction (J)
             if (E_H(iclass) < self%E_Hp) then
                 ! Embryo or juvenile allocating to maturation
                 dE_H(iclass) = p_R
@@ -287,65 +301,81 @@ contains
                 p_R_sum = p_R_sum + N(iclass)*p_R
             end if
 
-            ! Damage-inducing compounds, damage, survival (0-1) - p 216
+            ! Change in damage-inducing compounds and structure-weighted hazard - p 216 in DEB 2010
             dQ(iclass) = (Q(iclass)/L_m3*self%s_G + self%h_a)*max(0., p_C)/self%E_m
             dH(iclass) = Q(iclass)
 
-            _SET_BOTTOM_ODE_(self%id_waste, N(iclass)*(-p_A + self%p_M*L3 + self%p_T*L2 + one_minus_kap*p_C))
+            ! Take assimilated energy away from food source.
+            _SET_BOTTOM_ODE_(self%id_food, -N(iclass)*p_A)
+
+            ! Add energy fluxes towards maintenance, maturity, reproduction to the waste pool.
+            ! The part of the reproduction flux that produces offspring (not waste) will be dealt with later.
+            _SET_BOTTOM_ODE_(self%id_waste, N(iclass)*(self%p_M*L3 + self%p_T*L2 + one_minus_kap*p_C))
          end do
 
-         ! Compute number of individuals moving from each size class to the next (units: # s-1)
+         ! Compute number of individuals moving from each size class to the next (units: # d-1)
          nflux = 0
          do iclass=1,self%nclass
+            ! Compute change in structural volume V from chnage in structural length L (V=L^3)
+            ! NB the change in V is not well-defined [always zero] at V=0 (conception) - unlike the change in L!
             dV = 3*dL(iclass)*self%L_center(iclass)**2
             if (dV >= 0) then
-               ! Growing: positive flux (towards larger size) over right boundary
+               ! Growing: positive flux of individuals (towards larger size) over right boundary
                nflux(iclass) = nflux(iclass) + N(iclass)*dV/self%delta_V(iclass)
             else
-               ! Growing: negative flux (towards smaller size) over left boundary
+               ! Growing: negative flux of individuals (towards smaller size) over left boundary
                nflux(iclass-1) = nflux(iclass-1) + N(iclass)*dV/self%delta_V(iclass-1)
             end if
          end do
 
-         R_p = self%kap_R*p_R_sum/self%E_0/2  ! Divide by 2 assuming sexual reproduction (only female investment counts)
-         _SET_BOTTOM_ODE_(self%id_waste, -R_p*self%E_0)
-
+         ! Compute reproduction (# d-1) from population-integrated energy flux allocated to reproduction.
+         ! NB we divide by 2 assuming sexual reproduction (only female investment leads to eggs)
+         R_p = self%kap_R*p_R_sum/self%E_0/2
          _SET_HORIZONTAL_DIAGNOSTIC_(self%id_R, R_p)
 
+         ! All energy allocated to reproduction has previously been added to the waste pool.
+         ! Take out the part again that materializes as offspring.
+         _SET_BOTTOM_ODE_(self%id_waste, -R_p*self%E_0)
+
          ! Use recruitment as number of incoming individuals for the first size class.
+         ! Reserve per individual is the reserve per egg, minus the energy contained in structure at the lowest tracked size.
          nflux(0) = R_p
          E(0) = self%E_0 - self%V_center(1)*self%E_G
          E_H(0) = 0
          Q(0) = 0
          h(0) = 0
 
+         ! Compute fluxes of reserve, maturity, damange-inducing compounds, structure-weighted hazard between size classes.
          nflux(self%nclass) = 0
          do iclass=0,self%nclass
             if (nflux(iclass) >= 0) then
                ! Positive flux of individuals (towards larger size)
-               Eflux(iclass) = nflux(iclass)*E(iclass)
+               Eflux  (iclass) = nflux(iclass)*E  (iclass)
                E_Hflux(iclass) = nflux(iclass)*E_H(iclass)
-               Qflux(iclass) = nflux(iclass)*Q(iclass)
-               hflux(iclass) = nflux(iclass)*h(iclass)
+               Qflux  (iclass) = nflux(iclass)*Q  (iclass)
+               hflux  (iclass) = nflux(iclass)*h  (iclass)
             else
                ! Negative flux of individuals (towards smaller size)
-               Eflux(iclass) = nflux(iclass)*E(iclass+1)
+               Eflux  (iclass) = nflux(iclass)*E  (iclass+1)
                E_Hflux(iclass) = nflux(iclass)*E_H(iclass+1)
-               Qflux(iclass) = nflux(iclass)*Q(iclass+1)
-               hflux(iclass) = nflux(iclass)*h(iclass+1)
+               Qflux  (iclass) = nflux(iclass)*Q  (iclass+1)
+               hflux  (iclass) = nflux(iclass)*h  (iclass+1)
             end if
          end do
          
-         ! Transfer size-class-specific source terms and diagnostics to FABM
+         ! Transfer size-class-specific source terms to FABM
          do iclass=1,self%nclass
             ! Apply specific mortality (s-1) to size-class-specific abundances and apply upwind advection - this is a time-explicit version of Eq G.1 of Hartvig et al.
-            _SET_BOTTOM_ODE_(self%id_NV(iclass),  -hazard(iclass)*NV(iclass)   + (nflux (iclass-1) - nflux  (iclass))*self%V_center(iclass))
-            _SET_BOTTOM_ODE_(self%id_NE(iclass),  -hazard(iclass)*NE(iclass)   + Eflux  (iclass-1) - Eflux  (iclass) + dE  (iclass)*N(iclass))
+            _SET_BOTTOM_ODE_(self%id_NV(iclass),  -hazard(iclass)*NV  (iclass) + (nflux (iclass-1) - nflux  (iclass))*self%V_center(iclass))
+            _SET_BOTTOM_ODE_(self%id_NE(iclass),  -hazard(iclass)*NE  (iclass) + Eflux  (iclass-1) - Eflux  (iclass) + dE  (iclass)*N(iclass))
             _SET_BOTTOM_ODE_(self%id_NE_H(iclass),-hazard(iclass)*NE_H(iclass) + E_Hflux(iclass-1) - E_Hflux(iclass) + dE_H(iclass)*N(iclass))
-            _SET_BOTTOM_ODE_(self%id_NQ(iclass),  -hazard(iclass)*NQ(iclass)   + Qflux  (iclass-1) - Qflux  (iclass) + dQ  (iclass)*N(iclass))
-            _SET_BOTTOM_ODE_(self%id_Nh(iclass),  -hazard(iclass)*Nh(iclass)   + hflux  (iclass-1) - Hflux  (iclass) + dH  (iclass)*N(iclass))
+            _SET_BOTTOM_ODE_(self%id_NQ(iclass),  -hazard(iclass)*NQ  (iclass) + Qflux  (iclass-1) - Qflux  (iclass) + dQ  (iclass)*N(iclass))
+            _SET_BOTTOM_ODE_(self%id_Nh(iclass),  -hazard(iclass)*Nh  (iclass) + hflux  (iclass-1) - Hflux  (iclass) + dH  (iclass)*N(iclass))
          end do
+
+         ! Add dead structure and reserve to waste pool.
          _SET_BOTTOM_ODE_(self%id_waste,sum(hazard*(NV*self%E_G + NE)))
+
       _HORIZONTAL_LOOP_END_
 
    end subroutine do_bottom
