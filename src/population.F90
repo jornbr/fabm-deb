@@ -69,6 +69,9 @@ module deb_population
 
       real(rk) :: K
 
+      real(rk) :: salt_opt
+      real(rk) :: f_salt_300
+
       integer :: reproduction
    contains
       procedure :: initialize
@@ -122,10 +125,16 @@ contains
    call self%get_parameter(self%h_a,  'h_a',    'd-2',        'ageing acceleration')
    call self%get_parameter(self%s_G,  's_G',    '-',          'stress coefficient')
 
+   ! Temperature dependence
    call self%get_parameter(self%T_A,  'T_A',    'K',          'Arrhenius temperature (activation energy divided by universal gas constant)')
 
+   ! Salinity dependence
+   call self%get_parameter(self%salt_opt, 'salt_opt', '-', 'optimum salinity')
+   call self%get_parameter(self%f_salt_300, 'f_salt_300', '-', 'relative maintenance rate at 300 PSU')
+
+   ! Half-saturation for food
    call self%get_parameter(self%K,    'K',      'J',          'food half saturation')
-   
+
    call self%get_parameter(self%reproduction, 'reproduction', '', 'reproduction strategy (0: instantaneous, no reproduction buffer)', default=0)
 
    ! for now: get crucial implied properties as parameter rather than self computing them
@@ -222,6 +231,8 @@ contains
       real(rk), parameter :: delta_t = 12._rk/86400
       real(rk), parameter :: Kelvin = 273.15_rk
       real(rk), parameter :: T_ref = 20._rk + Kelvin
+      real(rk), parameter :: N_eps = 1e-12_rk
+      real(rk) :: f_salt
 
       _HORIZONTAL_LOOP_BEGIN_
 
@@ -239,6 +250,12 @@ contains
          p_T = self%p_T*c_T
          h_a = self%h_a*c_T*c_T
 
+         ! Salinity dependence
+         ! DEBtox style: no response up to salt=salt_opt, after that maintenance increases linearly with salinity.
+         ! The relative maintenance rate reaches f_salt_300 at salinity = 300 PSU
+         f_salt = 1._rk + (self%f_salt_300 - 1.)*max(0._rk, salt-self%salt_opt)/(300._rk-self%salt_opt)
+         p_M = f_salt*p_M
+
          v_E_G_plus_p_T_per_kap = (v*self%E_G + p_T)/self%kap
          p_M_per_kap = p_M/self%kap
          p_T_per_kap = p_T/self%kap
@@ -255,7 +272,7 @@ contains
             _GET_HORIZONTAL_(self%id_NH(iclass), Nh(iclass))
 
             N(iclass) = max(0.0_rk, NV(iclass))/self%V_center(iclass)
-            if (N(iclass) > 0) then
+            if (N(iclass) > N_eps) then
                ! Positive number of individuals in this class
                E(iclass) = max(0.0_rk, NE(iclass)/N(iclass))
                E_H(iclass) = max(0.0_rk, NE_H(iclass)/N(iclass))
@@ -355,12 +372,15 @@ contains
             dV = 3*dL(iclass)*self%L_center(iclass)**2
             if (dV >= 0) then
                ! Growing: positive flux of individuals (towards larger size) over right boundary
-               nflux(iclass) = nflux(iclass) + N(iclass)*dV/self%delta_V(iclass)
+               nflux(iclass) = nflux(iclass) + N(iclass)*dV
             else
-               ! Growing: negative flux of individuals (towards smaller size) over left boundary
-               nflux(iclass-1) = nflux(iclass-1) + N(iclass)*dV/self%delta_V(iclass-1)
+               ! Shrinking: negative flux of individuals (towards smaller size) over left boundary
+               nflux(iclass-1) = nflux(iclass-1) + N(iclass)*dV
             end if
          end do
+
+         ! Divide structural volume flux between bins by distance between bin centers to arive at fluxes of individuals.
+         nflux(1:self%nclass-1) = nflux(1:self%nclass-1)/self%delta_V(1:self%nclass-1)
 
          if (self%reproduction == 0) then
             ! Instantaneous reproduction - all energy allocated to reproduction is moved into offspring.
