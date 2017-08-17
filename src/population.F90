@@ -64,6 +64,8 @@ module deb_population
       real(rk) :: s_M
       real(rk) :: L_b, L_j, L_p, L_i, L_m
 
+      real(rk) :: T_A
+
       real(rk) :: K
    contains
       procedure :: initialize
@@ -116,8 +118,11 @@ contains
    call self%get_parameter(self%E_G,  'E_G',    'J cm-3',     'energy density of structure')
    call self%get_parameter(self%h_a,  'h_a',    'd-2',        'ageing acceleration')
    call self%get_parameter(self%s_G,  's_G',    '-',          'stress coefficient')
-   call self%get_parameter(self%K,    'K',      'J',          'food half saturation')
 
+   call self%get_parameter(self%T_A,  'T_A',    'K',          'Arrhenius temperature (activation energy divided by universal gas constant)')
+
+   call self%get_parameter(self%K,    'K',      'J',          'food half saturation')
+   
    ! for now: get crucial implied properties as parameter rather than self computing them
    call self%get_parameter(self%E_0,  'E_0', 'J',  'initial energy content of an egg')
    call self%get_parameter(self%L_b,  'L_b', 'cm', 'structural length at birth')
@@ -194,9 +199,10 @@ contains
       real(rk) :: E_G_per_kap
       real(rk) :: one_minus_kap
       real(rk) :: L_m3
-      real(rk) :: food, temp, salt
+      real(rk) :: food, temp, salt, T_K
       real(rk) :: c_T
-      
+      real(rk) :: v, k_J, p_Am, p_M, p_T, h_a
+
       integer :: iclass
       real(rk) :: f
       real(rk) :: L, L2, L3, s, p_A, p_C, p_R, p_R_sum, R_p, dV
@@ -206,19 +212,32 @@ contains
       real(rk), dimension(self%nclass) :: dE, dL, dE_H, dQ, dH
       real(rk), dimension(0:self%nclass) :: nflux, Eflux, E_Hflux, Qflux, hflux, E, E_H, Q, H
       real(rk), parameter :: delta_t = 12._rk/86400
+      real(rk), parameter :: Kelvin = 273.15_rk
+      real(rk), parameter :: T_ref = 20._rk + Kelvin
 
-      v_E_G_plus_p_T_per_kap = (self%v*self%E_G + self%p_T)/self%kap
-      p_M_per_kap = self%p_M/self%kap
-      p_T_per_kap = self%p_T/self%kap
-      E_G_per_kap = self%E_G/self%kap
-      one_minus_kap = 1.0_rk - self%kap
-      L_m3 = self%L_m**3
-      
       _HORIZONTAL_LOOP_BEGIN_
 
          _GET_HORIZONTAL_(self%id_food, food)
          _GET_(self%id_temp, temp)
          _GET_(self%id_salt, salt)
+
+         ! Apply temperature dependence of rates
+         T_K = temp + Kelvin
+         c_T = exp(self%T_A/T_ref - self%T_A/T_K)
+         v = self%v*c_T
+         k_J = self%k_J*c_T
+         p_Am = self%p_Am*c_T
+         p_M = self%p_M*c_T
+         p_T = self%p_T*c_T
+         h_a = self%h_a*c_T*c_T
+
+         v_E_G_plus_p_T_per_kap = (v*self%E_G + p_T)/self%kap
+         p_M_per_kap = p_M/self%kap
+         p_T_per_kap = p_T/self%kap
+         E_G_per_kap = self%E_G/self%kap
+         one_minus_kap = 1.0_rk - self%kap
+         L_m3 = self%L_m**3
+
          N_e = 0
          N_j = 0
          N_a = 0
@@ -228,7 +247,7 @@ contains
             _GET_HORIZONTAL_(self%id_NE_H(iclass), NE_H(iclass))
             _GET_HORIZONTAL_(self%id_NQ(iclass), NQ(iclass))
             _GET_HORIZONTAL_(self%id_NH(iclass), Nh(iclass))
-      
+
             N(iclass) = max(0.0_rk, NV(iclass))/self%V_center(iclass)
             if (N(iclass) > 0) then
                ! Positive number of individuals in this class
@@ -236,16 +255,6 @@ contains
                E_H(iclass) = max(0.0_rk, NE_H(iclass)/N(iclass))
                Q(iclass) = max(0.0_rk, NQ(iclass)/N(iclass))
                H(iclass) = max(0.0_rk, Nh(iclass)/N(iclass))
-               if (E_H(iclass) > self%E_Hp) then
-                  ! Adult
-                  N_a = N_a + N(iclass)
-               elseif (E_H(iclass) > self%E_Hb) then
-                  ! Juvenile
-                  N_j = N_j + N(iclass)
-               else
-                  ! Egg/embryo
-                  N_e = N_e + N(iclass)
-               end if
             else
                ! Non-positive number of individuals in this class
                E(iclass) = 0
@@ -254,9 +263,27 @@ contains
                H(iclass) = 0
             end if
          end do
+
+         ! Count individuals per life stage
+         N_e = 0
+         N_j = 0
+         N_a = 0
+         do iclass=1,self%nclass
+            if (E_H(iclass) > self%E_Hp) then
+               ! Adult
+               N_a = N_a + N(iclass)
+            elseif (E_H(iclass) > self%E_Hb) then
+               ! Juvenile
+               N_j = N_j + N(iclass)
+            else
+               ! Egg/embryo
+               N_e = N_e + N(iclass)
+            end if
+         end do
          _SET_HORIZONTAL_DIAGNOSTIC_(self%id_N_e, N_e)
          _SET_HORIZONTAL_DIAGNOSTIC_(self%id_N_j, N_j)
          _SET_HORIZONTAL_DIAGNOSTIC_(self%id_N_a, N_a)
+
          hazard = h/self%V_center
 
          ! Individual physiology (per size class)
@@ -275,22 +302,22 @@ contains
                p_A = 0
             else
                ! Feeding juvenile or adult
-               p_A = self%p_Am*L2*f*s
+               p_A = p_Am*L2*f*s
             end if
 
             ! Catabolic flux
             p_C = E(iclass)*(v_E_G_plus_P_T_per_kap*s*L2 + p_M_per_kap*L3)/(E(iclass) + E_G_per_kap*L3)
 
             ! Allocation to maturity/reproduction (maturity maintenance already subtracted)
-            p_R = one_minus_kap*p_C - self%k_J*E_H(iclass)
+            p_R = one_minus_kap*p_C - k_J*E_H(iclass)
 
             ! Change in reserve E (J) and structural length L (cm)
             dE(iclass) = p_A - p_C
-            dL(iclass) = (E(iclass)*self%v*s-(p_M_per_kap*L+p_T_per_kap*s)*L3)/3/(E(iclass)+E_G_per_kap*L3)
+            dL(iclass) = (E(iclass)*v*s-(p_M_per_kap*L+p_T_per_kap*s)*L3)/3/(E(iclass)+E_G_per_kap*L3)
 
             ! Verify consistence between expressions for j_C and r
-            !write (*,*) p_C, (self%v/L - dL(iclass)/L*3)*E(iclass), p_C - (self%v/L - dL(iclass)/L*3)*E(iclass)
-            !write (*,*) (self%kap*p_C - self%p_M*L3 - self%p_T*L2)/self%E_G, dL(iclass)*3*L2, (self%kap*p_C - self%p_M*L3 - self%p_T*L2)/self%E_G - dL(iclass)*3*L2
+            !write (*,*) p_C, (v/L - dL(iclass)/L*3)*E(iclass), p_C - (v/L - dL(iclass)/L*3)*E(iclass)
+            !write (*,*) (self%kap*p_C - p_M*L3 - p_T*L2)/self%E_G, dL(iclass)*3*L2, (self%kap*p_C - p_M*L3 - p_T*L2)/self%E_G - dL(iclass)*3*L2
 
             ! Change in maturity E_H (J) and population-integrated reproduction (J)
             if (E_H(iclass) < self%E_Hp) then
@@ -302,7 +329,7 @@ contains
             end if
 
             ! Change in damage-inducing compounds and structure-weighted hazard - p 216 in DEB 2010
-            dQ(iclass) = (Q(iclass)/L_m3*self%s_G + self%h_a)*max(0., p_C)/self%E_m
+            dQ(iclass) = (Q(iclass)/L_m3*self%s_G + h_a)*max(0., p_C)/self%E_m
             dH(iclass) = Q(iclass)
 
             ! Take assimilated energy away from food source.
@@ -310,7 +337,7 @@ contains
 
             ! Add energy fluxes towards maintenance, maturity, reproduction to the waste pool.
             ! The part of the reproduction flux that produces offspring (not waste) will be dealt with later.
-            _SET_BOTTOM_ODE_(self%id_waste, N(iclass)*(self%p_M*L3 + self%p_T*L2 + one_minus_kap*p_C))
+            _SET_BOTTOM_ODE_(self%id_waste, N(iclass)*(p_M*L3 + p_T*L2 + one_minus_kap*p_C))
          end do
 
          ! Compute number of individuals moving from each size class to the next (units: # d-1)
@@ -362,7 +389,7 @@ contains
                hflux  (iclass) = nflux(iclass)*h  (iclass+1)
             end if
          end do
-         
+
          ! Transfer size-class-specific source terms to FABM
          do iclass=1,self%nclass
             ! Apply specific mortality (s-1) to size-class-specific abundances and apply upwind advection - this is a time-explicit version of Eq G.1 of Hartvig et al.
