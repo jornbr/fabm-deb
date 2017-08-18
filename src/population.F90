@@ -102,7 +102,7 @@ module deb_population
    end type type_population
 
    ! Standard variable ("total mass") used for mass conservation checking
-   type (type_bulk_standard_variable),parameter :: total_energy = type_bulk_standard_variable(name='total_energy',units='J',aggregate_variable=.true.,conserved=.true.)
+   type (type_bulk_standard_variable),parameter :: total_energy = type_bulk_standard_variable(name='total_energy',units='J m-3',aggregate_variable=.true.,conserved=.true.)
 !
 !EOP
 !-----------------------------------------------------------------------
@@ -201,28 +201,28 @@ contains
          NV_ini = 0
          NE_ini = 0
       end if
-      call self%register_state_variable(self%id_NV(iclass), 'NV_'//trim(strindex), 'cm3', 'structural volume in bin '//trim(strindex), initial_value=NV_ini)
-      call self%register_state_variable(self%id_NE(iclass), 'NE_'//trim(strindex), 'J', 'reserve in bin '//trim(strindex), initial_value=NE_ini)
-      call self%register_state_variable(self%id_NE_H(iclass), 'NE_H_'//trim(strindex), 'J', 'maturity in bin '//trim(strindex))
-      call self%register_state_variable(self%id_NE_R(iclass), 'NE_R_'//trim(strindex), 'J', 'reproduction buffer in bin '//trim(strindex))
-      call self%register_state_variable(self%id_NQ(iclass), 'NQ_'//trim(strindex), '-', 'damage-inducing compounds in bin '//trim(strindex))
-      call self%register_state_variable(self%id_Nh(iclass), 'Nh_'//trim(strindex), 'd-1 cm3', 'structure-weighted hazard in bin '//trim(strindex))
+      call self%register_state_variable(self%id_NV(iclass), 'NV_'//trim(strindex), 'cm3 m-2', 'structural volume in bin '//trim(strindex), initial_value=NV_ini)
+      call self%register_state_variable(self%id_NE(iclass), 'NE_'//trim(strindex), 'J m-2', 'reserve in bin '//trim(strindex), initial_value=NE_ini)
+      call self%register_state_variable(self%id_NE_H(iclass), 'NE_H_'//trim(strindex), 'J m-2', 'maturity in bin '//trim(strindex))
+      call self%register_state_variable(self%id_NE_R(iclass), 'NE_R_'//trim(strindex), 'J m-2', 'reproduction buffer in bin '//trim(strindex))
+      call self%register_state_variable(self%id_NQ(iclass), 'NQ_'//trim(strindex), 'm-2', 'damage-inducing compounds in bin '//trim(strindex))
+      call self%register_state_variable(self%id_Nh(iclass), 'Nh_'//trim(strindex), 'd-1 cm3 m-2', 'structure-weighted hazard in bin '//trim(strindex))
       call self%set_variable_property(self%id_NV(iclass),'V',self%V_center(iclass))
       call self%add_to_aggregate_variable(total_energy, self%id_NV(iclass), scale_factor=self%E_G)
       call self%add_to_aggregate_variable(total_energy, self%id_NE(iclass))
       call self%add_to_aggregate_variable(total_energy, self%id_NE_R(iclass))
    end do
-   call self%register_state_variable(self%id_waste, 'waste', 'J', 'waste target')
-   call self%register_state_dependency(self%id_food, 'food', 'J', 'food source')
+   call self%register_state_variable(self%id_waste, 'waste', 'J m-2', 'waste target')
+   call self%register_state_dependency(self%id_food, 'food', 'J m-2', 'food source')
    call self%add_to_aggregate_variable(total_energy, self%id_waste)
 
    call self%register_dependency(self%id_temp, standard_variables%temperature)
    call self%register_dependency(self%id_salt, standard_variables%practical_salinity)
 
-   call self%register_diagnostic_variable(self%id_R, 'R', '# d-1', 'reproduction rate')
-   call self%register_diagnostic_variable(self%id_N_e, 'N_e', '#', 'number of non-feeding individuals (eggs, embryos)')
-   call self%register_diagnostic_variable(self%id_N_j, 'N_j', '#', 'number of juveniles (feeding but not reproducing)')
-   call self%register_diagnostic_variable(self%id_N_a, 'N_a', '#', 'number of adults (feeding and reproducing)')
+   call self%register_diagnostic_variable(self%id_R, 'R', '# m-2 d-1', 'reproduction rate')
+   call self%register_diagnostic_variable(self%id_N_e, 'N_e', '# m-2', 'number of non-feeding individuals (eggs, embryos)')
+   call self%register_diagnostic_variable(self%id_N_j, 'N_j', '# m-2', 'number of juveniles (feeding but not reproducing)')
+   call self%register_diagnostic_variable(self%id_N_a, 'N_a', '# m-2', 'number of adults (feeding and reproducing)')
 
    self%dt = 86400
 
