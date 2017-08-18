@@ -152,7 +152,7 @@ contains
    call self%get_parameter(self%T_A,  'T_A',    'K',          'Arrhenius temperature (activation energy divided by universal gas constant)')
 
    ! Salinity dependence
-   call self%get_parameter(self%salt_opt, 'salt_opt', '-', 'optimum salinity')
+   call self%get_parameter(self%salt_opt,   'salt_opt',   '-', 'optimum salinity')
    call self%get_parameter(self%f_salt_300, 'f_salt_300', '-', 'relative maintenance rate at 300 PSU')
 
    ! Half-saturation for food
@@ -262,6 +262,7 @@ contains
          _GET_HORIZONTAL_(self%id_food, food)
          _GET_(self%id_temp, temp)
          _GET_(self%id_salt, salt)
+         salt = max(0._rk, min(300._rk, salt))
 
          ! Apply temperature dependence of rates
          T_K = temp + Kelvin
