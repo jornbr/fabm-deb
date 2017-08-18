@@ -333,7 +333,7 @@ contains
          _SET_HORIZONTAL_DIAGNOSTIC_(self%id_N_j, N_j)
          _SET_HORIZONTAL_DIAGNOSTIC_(self%id_N_a, N_a)
 
-         hazard = h/self%V_center
+         hazard = h(1:self%nclass)/self%V_center
 
          ! Individual physiology (per size class)
          dE_H = 0
