@@ -53,7 +53,9 @@ module deb_population
 
       type (type_bottom_state_variable_id) :: id_waste, id_food
 
-      type (type_horizontal_diagnostic_variable_id) :: id_R, id_N_e, id_N_j, id_N_a
+      type (type_horizontal_diagnostic_variable_id) :: id_R
+      type (type_horizontal_diagnostic_variable_id) :: id_N_e, id_N_j, id_N_a
+      type (type_horizontal_diagnostic_variable_id) :: id_Et_e, id_Et_j, id_Et_a
 
       type (type_dependency_id) :: id_temp
       type (type_dependency_id) :: id_salt
@@ -89,8 +91,11 @@ module deb_population
       real(rk) :: L_b, L_j, L_p, L_i, L_m
 
       real(rk) :: T_A
+      real(rk) :: T_ref
 
       real(rk) :: K
+
+      real(rk) :: R_bg
 
       real(rk) :: salt_opt
       real(rk) :: f_salt_300
@@ -126,7 +131,7 @@ contains
    real(rk) :: delta_logV
    real(rk) :: V_min, V_max
    character(len=8) :: strindex
-   real(rk) :: NV_ini, NE_ini
+   real(rk) :: N_ini
 !EOP
 !-----------------------------------------------------------------------
 !BOC
@@ -150,6 +155,7 @@ contains
 
    ! Temperature dependence
    call self%get_parameter(self%T_A,  'T_A',    'K',          'Arrhenius temperature (activation energy divided by universal gas constant)')
+   call self%get_parameter(self%T_ref,'T_ref',  'degrees_C',  'Reference temperature', default=20._rk)
 
    ! Salinity dependence
    call self%get_parameter(self%salt_opt,   'salt_opt',   '-', 'optimum salinity')
@@ -159,6 +165,7 @@ contains
    call self%get_parameter(self%K,    'K',      'J',          'food half saturation')
 
    call self%get_parameter(self%reproduction, 'reproduction', '', 'reproduction strategy (0: instantaneous, no reproduction buffer)', default=0)
+   call self%get_parameter(self%R_bg,         'R_bg',         '# d-1', 'emergence from non-tracked resting eggs (cysts)', default=0.0_rk)
 
    ! for now: get crucial implied properties as parameter rather than self computing them
    call self%get_parameter(self%E_0,  'E_0', 'J',  'initial energy content of an egg')
@@ -195,14 +202,12 @@ contains
    do iclass=1,self%nclass
       write (strindex, '(i0)') iclass
       if (iclass == 1) then
-         NV_ini = self%V_center(iclass)
-         NE_ini = self%E_0
+         N_ini = 1
       else
-         NV_ini = 0
-         NE_ini = 0
+         N_ini = 0
       end if
-      call self%register_state_variable(self%id_NV(iclass), 'NV_'//trim(strindex), 'cm3 m-2', 'structural volume in bin '//trim(strindex), initial_value=NV_ini)
-      call self%register_state_variable(self%id_NE(iclass), 'NE_'//trim(strindex), 'J m-2', 'reserve in bin '//trim(strindex), initial_value=NE_ini)
+      call self%register_state_variable(self%id_NV(iclass), 'NV_'//trim(strindex), 'cm3 m-2', 'structural volume in bin '//trim(strindex), initial_value=N_ini*self%V_center(iclass))
+      call self%register_state_variable(self%id_NE(iclass), 'NE_'//trim(strindex), 'J m-2', 'reserve in bin '//trim(strindex), initial_value=N_ini*(self%E_0 - self%V_center(iclass)*self%E_G))
       call self%register_state_variable(self%id_NE_H(iclass), 'NE_H_'//trim(strindex), 'J m-2', 'maturity in bin '//trim(strindex))
       call self%register_state_variable(self%id_NE_R(iclass), 'NE_R_'//trim(strindex), 'J m-2', 'reproduction buffer in bin '//trim(strindex))
       call self%register_state_variable(self%id_NQ(iclass), 'NQ_'//trim(strindex), 'm-2', 'damage-inducing compounds in bin '//trim(strindex))
@@ -223,6 +228,9 @@ contains
    call self%register_diagnostic_variable(self%id_N_e, 'N_e', '# m-2', 'number of non-feeding individuals (eggs, embryos)')
    call self%register_diagnostic_variable(self%id_N_j, 'N_j', '# m-2', 'number of juveniles (feeding but not reproducing)')
    call self%register_diagnostic_variable(self%id_N_a, 'N_a', '# m-2', 'number of adults (feeding and reproducing)')
+   call self%register_diagnostic_variable(self%id_Et_e, 'Et_e', 'J m-2', 'energy in non-feeding individuals (eggs, embryos)')
+   call self%register_diagnostic_variable(self%id_Et_j, 'Et_j', 'J m-2', 'energy in juveniles (feeding but not reproducing)')
+   call self%register_diagnostic_variable(self%id_Et_a, 'Et_a', 'J m-2', 'energy in adults (feeding and reproducing)')
 
    self%dt = 86400
 
@@ -247,13 +255,13 @@ contains
       real(rk) :: f
       real(rk) :: L, L2, L3, s, p_A, p_C, p_R, p_R_sum, R_p, dV
       real(rk) :: N_e, N_j, N_a
+      real(rk) :: Et_e, Et_j, Et_a
       real(rk), dimension(self%nclass) :: NV, NE, NE_H, NE_R, NQ, Nh
       real(rk), dimension(self%nclass) :: N, hazard, rates
       real(rk), dimension(self%nclass) :: dE, dL, dE_H, dE_R, dQ, dH
       real(rk), dimension(0:self%nclass) :: nflux, Eflux, E_Hflux, E_Rflux, Qflux, hflux, E, E_H, E_R, Q, H
       real(rk), parameter :: delta_t = 12._rk/86400
       real(rk), parameter :: Kelvin = 273.15_rk
-      real(rk), parameter :: T_ref = 20._rk + Kelvin
       real(rk), parameter :: N_eps = 1e-12_rk
       real(rk) :: f_salt
 
@@ -266,7 +274,7 @@ contains
 
          ! Apply temperature dependence of rates
          T_K = temp + Kelvin
-         c_T = exp(self%T_A/T_ref - self%T_A/T_K)
+         c_T = exp(self%T_A/(self%T_ref + Kelvin) - self%T_A/T_K)
          v = self%v*c_T
          k_J = self%k_J*c_T
          p_Am = self%p_Am*c_T
@@ -278,7 +286,8 @@ contains
          ! DEBtox style: no response up to salt=salt_opt, after that maintenance increases linearly with salinity.
          ! The relative maintenance rate reaches f_salt_300 at salinity = 300 PSU
          f_salt = 1._rk + (self%f_salt_300 - 1.)*max(0._rk, salt-self%salt_opt)/(300._rk-self%salt_opt)
-         p_M = f_salt*p_M
+         !p_M = f_salt*p_M
+         p_T = (f_salt-1.)*c_T
 
          v_E_G_plus_p_T_per_kap = (v*self%E_G + p_T)/self%kap
          p_M_per_kap = p_M/self%kap
@@ -317,21 +326,30 @@ contains
          N_e = 0
          N_j = 0
          N_a = 0
+         Et_e = 0
+         Et_j = 0
+         Et_a = 0
          do iclass=1,self%nclass
             if (E_H(iclass) > self%E_Hp) then
                ! Adult
                N_a = N_a + N(iclass)
+               Et_a = Et_a + NV(iclass)*self%E_G + NE(iclass)
             elseif (E_H(iclass) > self%E_Hb) then
                ! Juvenile
                N_j = N_j + N(iclass)
+               Et_j = Et_j + NV(iclass)*self%E_G + NE(iclass)
             else
                ! Egg/embryo
                N_e = N_e + N(iclass)
+               Et_e = Et_e + NV(iclass)*self%E_G + NE(iclass)
             end if
          end do
          _SET_HORIZONTAL_DIAGNOSTIC_(self%id_N_e, N_e)
          _SET_HORIZONTAL_DIAGNOSTIC_(self%id_N_j, N_j)
          _SET_HORIZONTAL_DIAGNOSTIC_(self%id_N_a, N_a)
+         _SET_HORIZONTAL_DIAGNOSTIC_(self%id_Et_e, Et_e)
+         _SET_HORIZONTAL_DIAGNOSTIC_(self%id_Et_j, Et_j)
+         _SET_HORIZONTAL_DIAGNOSTIC_(self%id_Et_a, Et_a)
 
          hazard = h(1:self%nclass)/self%V_center
 
@@ -426,6 +444,9 @@ contains
          ! NB we divide by 2 assuming sexual reproduction (only female investment leads to eggs)
          R_p = self%kap_R*p_R_sum/self%E_0/2
          _SET_HORIZONTAL_DIAGNOSTIC_(self%id_R, R_p)
+
+         ! Emergence from non-tracked resting cysts [parameter is given at reference temperature]
+         R_p = R_p + self%R_bg*c_T
 
          ! Energy lost during reproduction goes to waste
          _SET_BOTTOM_ODE_(self%id_waste, p_R_sum - R_p*self%E_0)
