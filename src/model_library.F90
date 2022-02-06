@@ -3,7 +3,7 @@ module deb_model_library
    use fabm_types, only: type_base_model_factory,type_base_model
 
    use deb_population
-   ! Add new mizer models here
+   ! Add new DEB models here
 
    implicit none
 
@@ -25,7 +25,7 @@ contains
       class (type_base_model),pointer :: model
 
       select case (name)
-         case ('population');     allocate(type_population::model)
+         case ('population'); allocate(type_population::model)
          ! Add new DEB models here
       end select
 
